@@ -247,21 +247,28 @@ async function processAudio(audioBlob) {
         
         const { response: assistantResponse } = await chatResponse.json();
         
+        // Convertir la respuesta a string si es un objeto
+        const responseText = typeof assistantResponse === 'string' 
+            ? assistantResponse 
+            : (assistantResponse.output || assistantResponse.content || JSON.stringify(assistantResponse));
+        
+        console.log('💬 Respuesta recibida:', responseText);
+        
         // Mostrar respuesta
-        addMessage(assistantResponse, 'assistant');
+        addMessage(responseText, 'assistant');
         
         // 3. Generar y reproducir audio
         showStatus('Generando voz', 'processing');
         updateOrbText('Generando voz...');
         
-        console.log('→ Enviando texto a TTS:', assistantResponse.substring(0, 50) + '...');
+        console.log('→ Enviando texto a TTS:', responseText.substring(0, 50) + '...');
         
         const ttsResponse = await fetch('/api/speak', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ text: assistantResponse })
+            body: JSON.stringify({ text: responseText })
         });
         
         console.log('← Respuesta TTS recibida:', ttsResponse.status, ttsResponse.statusText);

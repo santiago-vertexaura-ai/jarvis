@@ -6,11 +6,6 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs/promises';
 import axios from 'axios';
-import { ChatOpenAI } from '@langchain/openai';
-import { DynamicStructuredTool } from '@langchain/core/tools';
-import { AgentExecutor, createOpenAIFunctionsAgent } from 'langchain/agents';
-import { ChatPromptTemplate, MessagesPlaceholder } from '@langchain/core/prompts';
-import { z } from 'zod';
 
 dotenv.config();
 
@@ -54,109 +49,86 @@ async function getCityCoordinates(city) {
   }
 }
 
-// Crear herramienta de clima usando LangChain
-const weatherTool = new DynamicStructuredTool({
-  name: 'obtener_clima',
-  description: 'Obtiene el clima actual de una ciudad especificada. Usa esta herramienta cuando el usuario pregunte por el tiempo, clima, temperatura o condiciones meteorológicas de cualquier ciudad.',
-  schema: z.object({
-    city: z.string().describe('El nombre de la ciudad para consultar el clima')
-  }),
-  func: async ({ city }) => {
-    try {
-      console.log('📍 Consultando clima para:', city);
-      
-      // Obtener coordenadas
-      const location = await getCityCoordinates(city);
-      if (!location) {
-        return `No se pudo encontrar la ciudad "${city}". Intenta con otra ciudad.`;
-      }
-      
-      console.log('✓ Coordenadas encontradas:', location);
-      
-      // Obtener datos del clima
-      const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&timezone=auto`;
-      const weatherResponse = await axios.get(weatherUrl);
-      
-      const current = weatherResponse.data.current;
-      
-      // Interpretar el código del clima
-      const weatherCodes = {
-        0: 'Despejado',
-        1: 'Mayormente despejado',
-        2: 'Parcialmente nublado',
-        3: 'Nublado',
-        45: 'Con niebla',
-        48: 'Niebla con escarcha',
-        51: 'Llovizna ligera',
-        53: 'Llovizna moderada',
-        55: 'Llovizna densa',
-        61: 'Lluvia ligera',
-        63: 'Lluvia moderada',
-        65: 'Lluvia intensa',
-        71: 'Nevada ligera',
-        73: 'Nevada moderada',
-        75: 'Nevada intensa',
-        80: 'Chubascos ligeros',
-        81: 'Chubascos moderados',
-        82: 'Chubascos violentos',
-        95: 'Tormenta'
-      };
-      
-      const weatherDescription = weatherCodes[current.weather_code] || 'Condiciones desconocidas';
-      
-      const climaInfo = `Clima en ${location.name}, ${location.country}:
+// Función para obtener el clima de una ciudad
+async function getWeather(city) {
+  try {
+    console.log('📍 Consultando clima para:', city);
+    
+    // Obtener coordenadas
+    const location = await getCityCoordinates(city);
+    if (!location) {
+      return `No se pudo encontrar la ciudad "${city}". Intenta con otra ciudad.`;
+    }
+    
+    console.log('✓ Coordenadas encontradas:', location);
+    
+    // Obtener datos del clima
+    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&timezone=auto`;
+    const weatherResponse = await axios.get(weatherUrl);
+    
+    const current = weatherResponse.data.current;
+    
+    // Interpretar el código del clima
+    const weatherCodes = {
+      0: 'Despejado',
+      1: 'Mayormente despejado',
+      2: 'Parcialmente nublado',
+      3: 'Nublado',
+      45: 'Con niebla',
+      48: 'Niebla con escarcha',
+      51: 'Llovizna ligera',
+      53: 'Llovizna moderada',
+      55: 'Llovizna densa',
+      61: 'Lluvia ligera',
+      63: 'Lluvia moderada',
+      65: 'Lluvia intensa',
+      71: 'Nevada ligera',
+      73: 'Nevada moderada',
+      75: 'Nevada intensa',
+      80: 'Chubascos ligeros',
+      81: 'Chubascos moderados',
+      82: 'Chubascos violentos',
+      95: 'Tormenta'
+    };
+    
+    const weatherDescription = weatherCodes[current.weather_code] || 'Condiciones desconocidas';
+    
+    const climaInfo = `Clima en ${location.name}, ${location.country}:
 - Temperatura: ${current.temperature_2m}°C
 - Sensación térmica: ${current.apparent_temperature}°C
 - Condiciones: ${weatherDescription}
 - Humedad: ${current.relative_humidity_2m}%
 - Viento: ${current.wind_speed_10m} km/h
 - Precipitación: ${current.precipitation} mm`;
-      
-      console.log('✓ Clima obtenido');
-      return climaInfo;
-    } catch (error) {
-      console.error('Error al obtener clima:', error);
-      return `Lo siento, no pude obtener el clima para "${city}".`;
+    
+    console.log('✓ Clima obtenido');
+    return climaInfo;
+  } catch (error) {
+    console.error('Error al obtener clima:', error);
+    return `Lo siento, no pude obtener el clima para "${city}".`;
+  }
+}
+
+// Definición de herramientas para OpenAI function calling
+const tools = [
+  {
+    type: 'function',
+    function: {
+      name: 'obtener_clima',
+      description: 'Obtiene el clima actual de una ciudad especificada. Usa esta función cuando el usuario pregunte por el tiempo, clima, temperatura o condiciones meteorológicas de cualquier ciudad.',
+      parameters: {
+        type: 'object',
+        properties: {
+          city: {
+            type: 'string',
+            description: 'El nombre de la ciudad para consultar el clima (ej: "Madrid", "Barcelona", "Nueva York")'
+          }
+        },
+        required: ['city']
+      }
     }
   }
-});
-
-// Configurar LangChain con OpenAI
-const llm = new ChatOpenAI({
-  modelName: 'gpt-4',
-  temperature: 0.7,
-  openAIApiKey: process.env.OPENAI_API_KEY,
-});
-
-// Crear el prompt para el agente
-const prompt = ChatPromptTemplate.fromMessages([
-  ['system', `Eres Jarvis, el asistente de IA personal más avanzado. INSTRUCCIONES CRÍTICAS:
-
-1. SIEMPRE debes dirigirte al usuario como "Jefe", "Boss", "Señor", "Patrón" o "Santi". Alterna entre estos términos de manera natural.
-2. Debes responder SIEMPRE en español castellano, sin importar el idioma en que te hablen.
-3. Sé profesional, eficiente y leal como un mayordomo británico de élite.
-4. Responde de forma concisa pero completa.
-5. Muestra respeto y deferencia, pero con un toque de calidez.
-6. Cuando te pregunten por el clima o tiempo de una ciudad, DEBES usar la herramienta obtener_clima.
-7. Al reportar el clima, hazlo de forma natural y conversacional.
-
-Ejemplos de inicio: "Por supuesto, Jefe", "Entendido, Boss", "Como ordene, Señor", "Enseguida, Patrón", "A sus órdenes, Santi".`],
-  ['human', '{input}'],
-  new MessagesPlaceholder('agent_scratchpad'),
-]);
-
-// Crear el agente con herramientas
-const agent = await createOpenAIFunctionsAgent({
-  llm,
-  tools: [weatherTool],
-  prompt,
-});
-
-const agentExecutor = new AgentExecutor({
-  agent,
-  tools: [weatherTool],
-  verbose: true,
-});
+];
 
 // Endpoint para transcribir audio con Whisper
 app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
@@ -188,7 +160,7 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// Endpoint para obtener respuesta de GPT con herramientas
+// Endpoint para obtener respuesta de GPT con función de clima
 app.post('/api/chat', async (req, res) => {
   try {
     const { message } = req.body;
@@ -197,10 +169,10 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'No se recibió mensaje' });
     }
 
-    console.log('💬 Generando respuesta con GPT + Herramientas...');
+    console.log('💬 Generando respuesta con GPT + Function Calling...');
     console.log('Mensaje del usuario:', message);
 
-    // Primer llamada a GPT con herramientas
+    // Crear el contexto de mensajes
     const messages = [
       {
         role: 'system',
@@ -222,6 +194,7 @@ Ejemplos de inicio: "Por supuesto, Jefe", "Entendido, Boss", "Como ordene, Seño
       }
     ];
 
+    // Primera llamada a GPT con herramientas disponibles
     let response = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: messages,
@@ -231,26 +204,26 @@ Ejemplos de inicio: "Por supuesto, Jefe", "Entendido, Boss", "Como ordene, Seño
 
     let responseMessage = response.choices[0].message;
 
-    // Si GPT quiere usar una herramienta
+    // Si GPT decide usar una herramienta
     if (responseMessage.tool_calls) {
       console.log('🔧 GPT solicita usar herramienta:', responseMessage.tool_calls[0].function.name);
       
-      // Agregar la respuesta de GPT a los mensajes
+      // Agregar la respuesta de GPT (con tool_calls) al historial
       messages.push(responseMessage);
 
-      // Procesar cada llamada a herramienta
+      // Ejecutar cada herramienta solicitada
       for (const toolCall of responseMessage.tool_calls) {
         const functionName = toolCall.function.name;
         const functionArgs = JSON.parse(toolCall.function.arguments);
 
-        console.log('Ejecutando función:', functionName, 'con args:', functionArgs);
+        console.log('Ejecutando función:', functionName, 'con argumentos:', functionArgs);
 
         let functionResponse;
         if (functionName === 'obtener_clima') {
           functionResponse = await getWeather(functionArgs.city);
         }
 
-        // Agregar el resultado de la herramienta a los mensajes
+        // Agregar el resultado de la herramienta al historial
         messages.push({
           tool_call_id: toolCall.id,
           role: 'tool',
@@ -259,7 +232,7 @@ Ejemplos de inicio: "Por supuesto, Jefe", "Entendido, Boss", "Como ordene, Seño
         });
       }
 
-      // Segunda llamada a GPT con el resultado de la herramienta
+      // Segunda llamada a GPT con los resultados de las herramientas
       const secondResponse = await openai.chat.completions.create({
         model: 'gpt-4',
         messages: messages,
