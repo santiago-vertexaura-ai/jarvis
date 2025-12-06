@@ -144,6 +144,39 @@ tools = [
                 'required': ['periodo']
             }
         }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'crear_evento',
+            'description': 'Crea un nuevo evento en el calendario de Google. Úsala cuando el usuario pida crear, agendar, programar una reunión, cita o evento. Ejemplos: "crea una reunión mañana a las 10", "agenda una cita con el doctor", "programa una llamada".',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'titulo': {
+                        'type': 'string',
+                        'description': 'Título o resumen del evento'
+                    },
+                    'fecha_inicio': {
+                        'type': 'string',
+                        'description': 'Fecha y hora de inicio en formato ISO 8601 (ej: "2025-12-06T10:00:00")'
+                    },
+                    'fecha_fin': {
+                        'type': 'string',
+                        'description': 'Fecha y hora de fin en formato ISO 8601 (opcional, por defecto 1 hora después)'
+                    },
+                    'descripcion': {
+                        'type': 'string',
+                        'description': 'Descripción del evento (opcional)'
+                    },
+                    'ubicacion': {
+                        'type': 'string',
+                        'description': 'Ubicación del evento (opcional)'
+                    }
+                },
+                'required': ['titulo', 'fecha_inicio']
+            }
+        }
     }
 ]
 
@@ -206,24 +239,37 @@ def chat():
         # Detectar si necesita usar herramientas
         message_lower = message.lower()
         
-        # Palabras clave para calendario
+        # Palabras clave para ver calendario
         calendar_keywords = ['evento', 'reunión', 'reuniones', 'agenda', 'calendario', 'cita', 'citas', 
                             'tengo hoy', 'tengo mañana', 'qué tengo', 'que tengo', 'próximo', 'proximo',
                             'programado', 'compromiso']
+        
+        # Palabras clave para crear eventos
+        create_event_keywords = ['crea', 'crear', 'creó', 'creo', 'agenda', 'agendar', 'agendó', 
+                                'programa', 'programar', 'programó', 'añade', 'añadir', 'añadió',
+                                'agrega', 'agregar', 'agregó', 'nueva reunión', 'nuevo evento',
+                                'nueva cita', 'pon', 'poner', 'apunta', 'apuntar']
         
         # Palabras clave para clima
         weather_keywords = ['clima', 'tiempo', 'temperatura', 'llueve', 'calor', 'frío', 'frio',
                            'pronóstico', 'pronostico', 'meteorológico']
         
         # Determinar si debe forzar el uso de herramientas
-        force_calendar = any(keyword in message_lower for keyword in calendar_keywords)
+        force_create_event = any(keyword in message_lower for keyword in create_event_keywords)
+        force_calendar = any(keyword in message_lower for keyword in calendar_keywords) and not force_create_event
         force_weather = any(keyword in message_lower for keyword in weather_keywords)
         
         # Crear el contexto de mensajes
+        from datetime import datetime
+        fecha_actual = datetime.now().strftime('%Y-%m-%d')
+        hora_actual = datetime.now().strftime('%H:%M')
+        
         messages = [
             {
                 'role': 'system',
-                'content': """Eres Jarvis, el asistente de IA personal de Santi. Tienes acceso COMPLETO a su calendario de Google y al clima mundial.
+                'content': f"""Eres Jarvis, el asistente de IA personal de Santi. Tienes acceso COMPLETO a su calendario de Google y al clima mundial.
+
+FECHA Y HORA ACTUAL: {fecha_actual} {hora_actual} (España)
 
 INSTRUCCIONES CRÍTICAS:
 
@@ -234,12 +280,17 @@ INSTRUCCIONES CRÍTICAS:
 HERRAMIENTAS DISPONIBLES:
 - obtener_clima: Para consultar el clima de cualquier ciudad
 - ver_calendario: Para consultar el calendario de Google del usuario
+- crear_evento: Para crear nuevos eventos en el calendario de Google
 
 REGLAS OBLIGATORIAS:
 - Si preguntan por clima/tiempo/temperatura → USA obtener_clima
 - Si preguntan por eventos/reuniones/agenda/calendario/citas/qué tiene → USA ver_calendario
-- NUNCA respondas sobre el calendario sin usar la herramienta ver_calendario
-- NUNCA digas que no tienes acceso o que vas a revisar - ÚSALA DIRECTAMENTE
+- Si piden crear/agendar/programar un evento/reunión/cita → USA crear_evento
+- NUNCA respondas sobre el calendario sin usar las herramientas
+- NUNCA digas que no tienes acceso o que vas a revisar - USA LAS HERRAMIENTAS DIRECTAMENTE
+- Para crear eventos, DEBES formatear las fechas en ISO 8601 (YYYY-MM-DDTHH:MM:SS)
+- IMPORTANTE: La fecha de HOY es {fecha_actual}. Úsala para calcular fechas como "hoy", "mañana", "pasado mañana"
+- Si dicen "a las 4" asume que es 16:00 (4 PM) a menos que digan "de la mañana"
 
 Ejemplos de inicio: "Por supuesto, Jefe", "Enseguida, Patrón", "A sus órdenes, Santi"."""
             },
@@ -251,7 +302,10 @@ Ejemplos de inicio: "Por supuesto, Jefe", "Enseguida, Patrón", "A sus órdenes,
         
         # Determinar tool_choice basado en detección
         tool_choice = 'auto'
-        if force_calendar:
+        if force_create_event:
+            tool_choice = {'type': 'function', 'function': {'name': 'crear_evento'}}
+            print('🎯 FORZANDO uso de crear_evento (se detectaron palabras clave de creación de evento)')
+        elif force_calendar:
             tool_choice = {'type': 'function', 'function': {'name': 'ver_calendario'}}
             print('🎯 FORZANDO uso de ver_calendario (se detectaron palabras clave de calendario)')
         elif force_weather:
@@ -294,6 +348,19 @@ Ejemplos de inicio: "Por supuesto, Jefe", "Enseguida, Patrón", "A sus órdenes,
                     else:
                         max_results = function_args.get('max_results', 10)
                         function_response = google_calendar.get_upcoming_events(max_results)
+                elif function_name == 'crear_evento':
+                    titulo = function_args['titulo']
+                    fecha_inicio = function_args['fecha_inicio']
+                    fecha_fin = function_args.get('fecha_fin')
+                    descripcion = function_args.get('descripcion')
+                    ubicacion = function_args.get('ubicacion')
+                    function_response = google_calendar.create_event(
+                        summary=titulo,
+                        start_datetime=fecha_inicio,
+                        end_datetime=fecha_fin,
+                        description=descripcion,
+                        location=ubicacion
+                    )
                 
                 # Agregar el resultado de la herramienta al historial
                 messages.append({

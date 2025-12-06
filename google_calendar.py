@@ -9,8 +9,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 
-# Scopes necesarios para Google Calendar
-SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
+# Scopes necesarios para Google Calendar (lectura y escritura)
+SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 def get_calendar_service():
     """Obtiene el servicio de Google Calendar autenticado"""
@@ -27,20 +27,29 @@ def get_calendar_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            print("\n🔐 Se requiere autenticación con Google Calendar")
+            print("📋 Configurando autenticación...\n")
+            
             # Crear credenciales desde variables de entorno
             client_config = {
                 "installed": {
                     "client_id": os.getenv("GOOGLE_CLIENT_ID"),
                     "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
-                    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob", "http://localhost"],
+                    "redirect_uris": ["http://localhost:8080/"],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                 }
             }
             
             flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-            # Usar el método de consola en lugar de navegador
-            creds = flow.run_console()
+            # Usar servidor local en puerto 8080
+            creds = flow.run_local_server(
+                host='localhost',
+                port=8080,
+                open_browser=True,
+                success_message='✅ Autenticación completada. Puedes cerrar esta ventana.'
+            )
+            print("✅ Autenticación completada exitosamente\n")
         
         # Guardar credenciales para la próxima vez
         with open(token_path, 'wb') as token:
@@ -138,3 +147,79 @@ def get_today_events():
     except Exception as e:
         print(f"Error al obtener eventos de hoy: {e}")
         return f"Lo siento, Jefe. Hubo un error al acceder a su calendario: {str(e)}"
+
+def create_event(summary, start_datetime, end_datetime=None, description=None, location=None):
+    """
+    Crea un nuevo evento en el calendario
+    
+    Args:
+        summary: Título del evento
+        start_datetime: Fecha/hora de inicio (formato ISO 8601 o datetime)
+        end_datetime: Fecha/hora de fin (opcional, por defecto 1 hora después del inicio)
+        description: Descripción del evento (opcional)
+        location: Ubicación del evento (opcional)
+    """
+    try:
+        service = get_calendar_service()
+        
+        # Convertir datetime a string si es necesario
+        if isinstance(start_datetime, datetime):
+            start_str = start_datetime.isoformat()
+        else:
+            start_str = start_datetime
+            
+        # Si no se proporciona hora de fin, usar 1 hora después del inicio
+        if end_datetime is None:
+            if isinstance(start_datetime, datetime):
+                end_dt = start_datetime + timedelta(hours=1)
+                end_str = end_dt.isoformat()
+            else:
+                # Parsear y añadir 1 hora
+                start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                end_dt = start_dt + timedelta(hours=1)
+                end_str = end_dt.isoformat()
+        elif isinstance(end_datetime, datetime):
+            end_str = end_datetime.isoformat()
+        else:
+            end_str = end_datetime
+        
+        # Crear el evento
+        event = {
+            'summary': summary,
+            'start': {
+                'dateTime': start_str,
+                'timeZone': 'Europe/Madrid',
+            },
+            'end': {
+                'dateTime': end_str,
+                'timeZone': 'Europe/Madrid',
+            }
+        }
+        
+        # Añadir campos opcionales
+        if description:
+            event['description'] = description
+        if location:
+            event['location'] = location
+        
+        # Insertar el evento
+        created_event = service.events().insert(calendarId='primary', body=event).execute()
+        
+        # Formatear respuesta
+        event_link = created_event.get('htmlLink')
+        start_time = datetime.fromisoformat(created_event['start']['dateTime'].replace('Z', '+00:00'))
+        
+        result = f"✅ Evento creado correctamente, Jefe:\n\n"
+        result += f"📌 {summary}\n"
+        result += f"🕐 {start_time.strftime('%d/%m/%Y a las %H:%M')}\n"
+        if description:
+            result += f"📝 {description}\n"
+        if location:
+            result += f"📍 {location}\n"
+        result += f"\n🔗 Ver evento: {event_link}"
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error al crear evento: {e}")
+        return f"Lo siento, Jefe. Hubo un error al crear el evento: {str(e)}"
