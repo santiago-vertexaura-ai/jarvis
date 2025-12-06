@@ -2,3 +2,6 @@ node_modules/
 .env
 *.log
 uploads/
+__pycache__/
+*.pyc
+token.pickle
